@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>STARFALL — a tiny game built from one prompt</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #070312; overflow: hidden; }
+  body { font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; color: #fff;
+         display: flex; align-items: center; justify-content: center; }
+  #wrap { position: relative; width: min(100vw, 56.25vh); aspect-ratio: 9 / 16;
+          max-height: 100vh; background: #0a0618; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  .hud { position: absolute; top: 0; left: 0; right: 0; display: flex;
+         justify-content: space-between; align-items: flex-start;
+         padding: 18px 20px; font-weight: 700; pointer-events: none;
+         text-shadow: 0 2px 8px rgba(0,0,0,.8); z-index: 5; }
+  .hud .score { font-size: 34px; color: #ffd23f; line-height: 1; }
+  .hud .score small { display: block; font-size: 12px; letter-spacing: 3px;
+         color: #cfc4ff; margin-bottom: 4px; }
+  .hud .time { font-size: 34px; line-height: 1; text-align: center; }
+  .hud .time small { display: block; font-size: 12px; letter-spacing: 3px;
+         color: #cfc4ff; margin-bottom: 4px; }
+  .hud .lives { font-size: 26px; letter-spacing: 2px; color: #ff5d7a; }
+  .hud .lives small { display: block; font-size: 12px; letter-spacing: 3px;
+         color: #cfc4ff; margin-bottom: 6px; text-align: right; }
+  #combo { position: absolute; top: 96px; left: 0; right: 0; text-align: center;
+           font-size: 26px; font-weight: 800; color: #7df9d4; opacity: 0;
+           text-shadow: 0 2px 10px rgba(0,0,0,.8); transition: opacity .2s; z-index: 5;
+           pointer-events: none; }
+  #tag { position: absolute; bottom: 14px; left: 0; right: 0; text-align: center;
+         font-size: 13px; letter-spacing: 4px; color: rgba(255,255,255,.55);
+         z-index: 5; pointer-events: none; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+             align-items: center; justify-content: center; text-align: center;
+             background: rgba(7,3,18,.72); z-index: 10; padding: 24px; }
+  .overlay h1 { font-size: 64px; letter-spacing: 6px; color: #ffd23f;
+                text-shadow: 0 0 24px rgba(255,210,63,.55); }
+  .overlay h2 { font-size: 15px; letter-spacing: 5px; color: #b9a8ff;
+                margin: 10px 0 22px; font-weight: 700; }
+  .overlay p { font-size: 18px; line-height: 1.55; color: #e8e2ff; max-width: 420px; }
+  .overlay p b { color: #ffd23f; }
+  .overlay .prompt { font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+                     font-size: 15px; background: rgba(255,255,255,.08);
+                     border: 1px solid rgba(255,255,255,.18); border-radius: 12px;
+                     padding: 14px 16px; margin: 20px 0; color: #c9f7ff;
+                     line-height: 1.5; text-align: left; }
+  .overlay .big { font-size: 58px; font-weight: 800; color: #fff; }
+  .overlay .final { font-size: 26px; color: #ffd23f; font-weight: 800; margin: 6px 0 2px; }
+  .overlay .best { font-size: 16px; color: #b9a8ff; margin-bottom: 8px; }
+  button { margin-top: 26px; font-family: inherit; font-size: 22px; font-weight: 800;
+           letter-spacing: 2px; color: #191419; background: #ffd23f; border: none;
+           border-radius: 999px; padding: 16px 42px; cursor: pointer;
+           box-shadow: 0 6px 24px rgba(255,210,63,.45); }
+  button:active { transform: scale(.96); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="720" height="1280"></canvas>
+  <div class="hud">
+    <div class="score"><small>SCORE</small><span id="score">0</span></div>
+    <div class="time"><small>TIME</small><span id="time">60</span></div>
+    <div class="lives"><small>LIVES</small><span id="lives">&#10084;&#10084;&#10084;</span></div>
+  </div>
+  <div id="combo"></div>
+  <div id="tag">STARFALL &middot; BUILT FROM ONE PROMPT</div>
+
+  <div id="startOverlay" class="overlay">
+    <h1>STARFALL</h1>
+    <h2>ONE PROMPT &middot; ONE AGENT &middot; ONE GAME</h2>
+    <p>Catch the falling <b>stars</b>. Dodge the <b>rocks</b>.<br>
+       You have <b>60 seconds</b> and <b>3 lives</b>.</p>
+    <div class="prompt">&gt; Build me a tiny browser game:<br>
+      catch the falling stars,<br>
+      dodge the rocks. Make it fun<br>
+      in 60 seconds.</div>
+    <p>Move with mouse, touch or arrow keys.</p>
+    <button id="startBtn">TAP TO START</button>
+  </div>
+
+  <div id="overOverlay" class="overlay hidden">
+    <div class="big">TIME UP!</div>
+    <div class="final">SCORE <span id="finalScore">0</span></div>
+    <div class="best">BEST <span id="bestScore">0</span></div>
+    <p id="verdict">Nice run, pilot.</p>
+    <button id="againBtn">PLAY AGAIN</button>
+  </div>
+</div>
+<script>
+"use strict";
+const W = 720, H = 1280;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const AUTOPLAY = params.get('autoplay') === '1';
+
+const SHIP_Y = 1140, SHIP_R = 26;
+const ROUND_SECONDS = 60;
+
+let state = 'menu';           // menu | playing | over
+let shipX = W / 2, targetX = W / 2;
+let objects = [];             // {x, y, vy, r, kind, rot, vr, seed}
+let stars = [];               // background twinkles {x, y, r, phase, speed}
+let score = 0, combo = 0, lives = 3, timeLeft = ROUND_SECONDS;
+let spawnTimer = 0, elapsed = 0, shake = 0, invuln = 0, lastTs = 0;
+let best = +(localStorage.getItem('starfall-best') || 0);
+
+for (let i = 0; i < 110; i++) {
+  stars.push({ x: Math.random() * W, y: Math.random() * H,
+               r: Math.random() * 1.8 + 0.5,
+               phase: Math.random() * Math.PI * 2,
+               speed: 0.6 + Math.random() * 1.6 });
+}
+
+// Pre-render the nebula backdrop once: cheap, and it never changes.
+const bg = document.createElement('canvas');
+bg.width = W; bg.height = H;
+(function paintBackground() {
+  const b = bg.getContext('2d');
+  const g = b.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0b0620'); g.addColorStop(0.55, '#12082e'); g.addColorStop(1, '#070312');
+  b.fillStyle = g; b.fillRect(0, 0, W, H);
+  const blobs = [[180, 300, 260, 'rgba(124,58,237,0.20)'], [560, 700, 300, 'rgba(219,39,119,0.14)'],
+                 [360, 1050, 280, 'rgba(56,189,248,0.12)'], [120, 900, 200, 'rgba(255,210,63,0.08)']];
+  for (const [x, y, r, c] of blobs) {
+    const rg = b.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, c); rg.addColorStop(1, 'rgba(0,0,0,0)');
+    b.fillStyle = rg; b.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+})();
+
+function reset() {
+  objects = []; score = 0; combo = 0; lives = 3;
+  timeLeft = ROUND_SECONDS; spawnTimer = 0; elapsed = 0;
+  shake = 0; invuln = 0; shipX = W / 2; targetX = W / 2;
+  $('score').textContent = '0';
+  $('time').textContent = String(ROUND_SECONDS);
+  $('lives').innerHTML = '&#10084;&#10084;&#10084;';
+  $('combo').style.opacity = 0;
+}
+
+function startGame() {
+  reset();
+  state = 'playing';
+  $('startOverlay').classList.add('hidden');
+  $('overOverlay').classList.add('hidden');
+  lastTs = performance.now();
+}
+
+function endGame() {
+  state = 'over';
+  const isBest = score > best;
+  if (isBest) { best = score; localStorage.setItem('starfall-best', String(best)); }
+  $('finalScore').textContent = String(score);
+  $('bestScore').textContent = String(best);
+  $('verdict').textContent = isBest ? 'New best score — the prompt delivered.'
+    : score >= 300 ? 'Sharp flying. The agent would be proud.'
+    : score >= 150 ? 'Nice run, pilot.' : 'Warm-up round. One more?';
+  $('overOverlay').classList.remove('hidden');
+}
+
+// --- input: mouse, touch, arrows -------------------------------------------
+function pointerToX(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  targetX = Math.max(40, Math.min(W - 40, (clientX - rect.left) / rect.width * W));
+}
+canvas.addEventListener('pointermove', e => pointerToX(e.clientX));
+canvas.addEventListener('pointerdown', e => pointerToX(e.clientX));
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  targetX = Math.max(40, targetX - 46);
+  if (e.key === 'ArrowRight') targetX = Math.min(W - 40, targetX + 46);
+  if ((e.key === ' ' || e.key === 'Enter') && state !== 'playing') startGame();
+});
+$('startBtn').addEventListener('click', startGame);
+$('againBtn').addEventListener('click', startGame);
+if (AUTOPLAY) setTimeout(() => { if (state === 'menu') startGame(); }, 600);
+
+// --- spawning: stars to catch, rocks to dodge; the fall gets faster --------
+function spawnObject() {
+  const t = elapsed / ROUND_SECONDS;              // 0 at start, 1 at the end
+  const isStar = Math.random() < 0.62;
+  const speed = (150 + t * 190) * (0.85 + Math.random() * 0.45);
+  objects.push({
+    x: 40 + Math.random() * (W - 80), y: -30,
+    vy: isStar ? speed : speed * 1.12,
+    r: isStar ? 15 + Math.random() * 5 : 17 + Math.random() * 10,
+    kind: isStar ? 'star' : 'rock',
+    rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 2.4,
+    seed: Math.random() * Math.PI * 2
+  });
+}
+
+function update(dt) {
+  elapsed += dt;
+  timeLeft = Math.max(0, ROUND_SECONDS - elapsed);
+  $('time').textContent = String(Math.ceil(timeLeft));
+
+  // The ship eases toward its target; autoplay steers it by itself.
+  if (AUTOPLAY) {
+    let want = W / 2, bestD = 1e9;
+    for (const o of objects) {
+      if (o.kind === 'star' && o.y < SHIP_Y) {
+        const d = SHIP_Y - o.y;
+        if (d < bestD) { bestD = d; want = o.x; }
+      }
+    }
+    for (const o of objects) {                    // dodge a rock right above
+      if (o.kind === 'rock' && o.y > SHIP_Y - 300 && o.y < SHIP_Y
+          && Math.abs(o.x - shipX) < 95) {
+        want = o.x < shipX ? shipX + 150 : shipX - 150;
+      }
+    }
+    targetX = Math.max(40, Math.min(W - 40, want));
+  }
+  shipX += (targetX - shipX) * Math.min(1, dt * 14);
+
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnObject();
+    const t = elapsed / ROUND_SECONDS;
+    spawnTimer = (0.62 - t * 0.30) * (0.75 + Math.random() * 0.5);
+  }
+
+  if (invuln > 0) invuln -= dt;
+  if (shake > 0) shake = Math.max(0, shake - dt * 26);
+
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const o = objects[i];
+    o.y += o.vy * dt;
+    o.rot += o.vr * dt;
+    if (o.y > H + 40) { objects.splice(i, 1); if (o.kind === 'star') combo = 0; continue; }
+
+    const dx = o.x - shipX, dy = o.y - SHIP_Y;
+    if (dx * dx + dy * dy < (o.r + SHIP_R - 6) * (o.r + SHIP_R - 6)) {
+      if (o.kind === 'star') {
+        combo++;
+        score += 10 + Math.min(combo - 1, 10) * 2;
+        $('score').textContent = String(score);
+        if (combo >= 3) {
+          const c = $('combo');
+          c.textContent = 'COMBO x' + combo;
+          c.style.opacity = 1;
+          clearTimeout(c._t);
+          c._t = setTimeout(() => { c.style.opacity = 0; }, 900);
+        }
+      } else if (invuln <= 0) {
+        lives--; combo = 0;
+        $('lives').innerHTML = '&#10084;'.repeat(Math.max(0, lives));
+        shake = 14; invuln = 1.2;
+        if (lives <= 0) { endGame(); return; }
+      }
+      objects.splice(i, 1);
+    }
+  }
+  if (timeLeft <= 0) endGame();
+}
+
+// --- drawing -----------------------------------------------------------------
+function drawStar(x, y, r, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    const a = i * Math.PI / 5 - Math.PI / 2;
+    ctx[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#ffd23f';
+  ctx.shadowColor = '#ffb703'; ctx.shadowBlur = 18;
+  ctx.fill(); ctx.restore();
+}
+
+function drawRock(o) {
+  ctx.save(); ctx.translate(o.x, o.y); ctx.rotate(o.rot);
+  ctx.beginPath();
+  const n = 7;
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2;
+    const rr = o.r * (0.82 + 0.28 * Math.sin(o.seed + i * 2.1));
+    ctx[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#8a8fa3'; ctx.fill();
+  ctx.strokeStyle = '#5b5f73'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.arc(-o.r * 0.25, -o.r * 0.2, o.r * 0.22, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(o.r * 0.3, o.r * 0.28, o.r * 0.16, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawShip() {
+  if (invuln > 0 && Math.floor(performance.now() / 90) % 2 === 0) return; // blink
+  ctx.save(); ctx.translate(shipX, SHIP_Y);
+  const flame = 26 + Math.sin(performance.now() / 60) * 8;
+  ctx.beginPath();
+  ctx.moveTo(0, 52 + flame); ctx.lineTo(-13, 30); ctx.lineTo(13, 30); ctx.closePath();
+  ctx.fillStyle = '#ff9f1c'; ctx.shadowColor = '#ff6b00'; ctx.shadowBlur = 22; ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(0, -34); ctx.lineTo(20, 18); ctx.lineTo(9, 30); ctx.lineTo(-9, 30); ctx.lineTo(-20, 18);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, -34, 0, 30);
+  g.addColorStop(0, '#e8f6ff'); g.addColorStop(1, '#7c5cff');
+  ctx.fillStyle = g; ctx.shadowColor = '#7c5cff'; ctx.shadowBlur = 18; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, -4, 9, 0, Math.PI * 2);
+  ctx.fillStyle = '#0b0620'; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, -4, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#7df9d4'; ctx.fill();
+  ctx.restore();
+}
+
+function render(now) {
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  ctx.drawImage(bg, 0, 0);
+  for (const s of stars) {
+    const a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(now / 1000 * s.speed + s.phase));
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const o of objects) {
+    if (o.kind === 'star') drawStar(o.x, o.y, o.r, o.rot);
+    else drawRock(o);
+  }
+  if (state !== 'menu') drawShip();
+  ctx.restore();
+}
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastTs) / 1000 || 0.016);
+  lastTs = now;
+  if (state === 'playing') update(dt);
+  render(now);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
